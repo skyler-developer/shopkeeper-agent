@@ -54,6 +54,7 @@ class MetaKnowledgeService:
         # 指标向量集合和字段向量集合分开管理，便于后续按对象类型独立召回
         self.metric_qdrant_repository: MetricQdrantRepository = metric_qdrant_repository
 
+# 向meta库中的table_info、column_info插入数据
     async def _save_tables_to_meta_db(
         self, meta_config: MetaConfig
     ) -> list[ColumnInfo]:
@@ -80,6 +81,20 @@ class MetaKnowledgeService:
                     table.name, column.name
                 )
                 # 字段 id 使用 table.column 形式，后续在向量索引和全文索引里都会复用
+                # 示例：
+                """
+                 column_info = ColumnInfo(
+                    id="dim_region.region_name",
+                    name="region_name",
+                    type="varchar(50)",
+                    role="dimension",
+                    examples=["华南", "华东", "西南", "华北", "华中"],
+                    description="订单所属的大区名称，如华东、华南等。",
+                    alias=["地区", "区域", "大区"],
+                    table_id="dim_region",
+                )
+                """
+
                 column_info = ColumnInfo(
                     id=f"{table.name}.{column.name}",
                     name=column.name,

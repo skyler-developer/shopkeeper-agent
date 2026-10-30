@@ -83,22 +83,33 @@ async def get_value_es_repository() -> ValueESRepository:
 
 
 async def get_query_service(
+    # 元数据仓储：从 Meta MySQL 补齐表、字段和主外键信息，组织 SQL 生成所需的上下文
     meta_mysql_repository: Annotated[
         MetaMySQLRepository, Depends(get_meta_mysql_repository)
     ],
+    # 向量化客户端：将检索关键词转换为向量，供 Qdrant 召回语义相关的字段和指标
     embedding_client: Annotated[
         HuggingFaceEndpointEmbeddings, Depends(get_embedding_client)
     ],
+    # 数仓仓储：读取数据库方言和版本，通过 EXPLAIN 校验 SQL，并执行最终查询获取真实数据
     dw_mysql_repository: Annotated[DWMySQLRepository, Depends(get_dw_mysql_repository)],
+    # 字段向量仓储：检索 column_info_collection，召回与用户问题相关的候选字段
     column_qdrant_repository: Annotated[
         ColumnQdrantRepository, Depends(get_column_qdrant_repository)
     ],
+    # 指标向量仓储：检索 metric_info_collection，召回 GMV 等指标及其依赖字段信息
     metric_qdrant_repository: Annotated[
         MetricQdrantRepository, Depends(get_metric_qdrant_repository)
     ],
+    # 字段取值仓储：全文检索 ES 的 value_index，将“华北”等业务值定位到对应字段
     value_es_repository: Annotated[ValueESRepository, Depends(get_value_es_repository)],
 ) -> QueryService:
-    """组装一次查询所需的业务服务"""
+    """组装一次查询所需的业务服务。
+
+    这些参数不是前端请求参数，而是由 FastAPI 自动注入的依赖对象。
+    Annotated 声明参数类型和依赖信息；Depends 指定获取对象的函数，
+    FastAPI 会先解析其下游依赖（如 MySQL Session），再将结果传入这里。
+    """
 
     # QueryService 只接收已经创建好的依赖对象，本身不关心这些对象来自 MySQL、Qdrant 还是 ES
     return QueryService(

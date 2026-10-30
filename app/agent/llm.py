@@ -15,8 +15,8 @@ llm = init_chat_model(
     model_provider="openai",
     base_url=app_config.llm.base_url,
     api_key=app_config.llm.api_key,
-    # 字段扩展、SQL 生成更看重稳定性，所以这里关闭随机发散
-    temperature=0,
+    # 字段扩展、SQL 生成更看重稳定性，所以这里调低点
+    temperature=0.3,
 )
 
 if __name__ == "__main__":

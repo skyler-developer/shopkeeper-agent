@@ -113,6 +113,7 @@ class MetaKnowledgeService:
 
         return column_infos
 
+# 将column_info转为向量，并存储到Qdrant向量数据库
     async def _save_column_info_to_qdrant(self, column_infos: list[ColumnInfo]):
         """把字段元数据继续推进成可语义检索的 Qdrant 向量点"""
         await self.column_qdrant_repository.ensure_collection()
@@ -152,6 +153,12 @@ class MetaKnowledgeService:
         embedding_batch_size = 20
         for i in range(0, len(embedding_texts), embedding_batch_size):
             batch_embedding_texts = embedding_texts[i : i + embedding_batch_size]
+        # 返回值是一批向量，每个向量对应一条输入文本，例如：
+        # batch_embeddings = [
+        #     [0.012, -0.034, 0.087],  # "region_name" 的向量
+        #     [0.056, 0.021, -0.073],  # "地区" 的向量
+        # ]
+
             batch_embeddings = await self.embedding_client.aembed_documents(
                 batch_embedding_texts
             )
@@ -174,35 +181,43 @@ class MetaKnowledgeService:
             for column in table.columns:
                 column2sync[f"{table.name}.{column.name}"] = column.sync
 
+        # 汇总所有需要同步到 ES 的字段取值对象
         value_infos: list[ValueInfo] = []
         for column_info in column_infos:
+            # 用字段 ID 从同步配置中读取开关，例如 dim_region.region_name -> True
             sync = column2sync[column_info.id]
             if sync:
-                # 这里拿的是字段真实值全集，不再是第 8 章里的少量 examples
+                # 从 DW 查询去重后的实际取值，最多 100000 个，不再只是少量 examples
                 current_column_values = (
                     await self.dw_mysql_repository.get_column_values(
                         column_info.table_id, column_info.name, 100000
                     )
                 )
+                # 将每个实际取值转换成 ValueInfo，记录取值本身及其所属字段
                 current_values_infos = [
                     ValueInfo(
+                        # 用“字段 ID + 实际值”作为文档 ID，例如 dim_region.region_name.华北
                         id=f"{column_info.id}.{current_column_value}",
                         value=current_column_value,
                         column_id=column_info.id,
                     )
                     for current_column_value in current_column_values
                 ]
+                # 将当前字段的所有取值对象逐个加入总列表
                 value_infos.extend(current_values_infos)
 
+        # 将取值对象批量写入 ES 的 value_index；空列表时 index() 直接返回
         await self.value_es_repository.index(value_infos)
 
     async def _save_metrics_to_meta_db(
         self, meta_config: MetaConfig
     ) -> list[MetricInfo]:
         """把配置里的指标信息和字段依赖关系写入 Meta MySQL"""
+        # 分别汇总指标定义和指标与字段的关联关系，稍后写入两张 Meta 表
         metric_infos: list[MetricInfo] = []
         column_metrics: list[ColumnMetric] = []
 
+        # 遍历 YAML 中的指标配置，例如 GMV、AOV
         for metric in meta_config.metrics:
             # MetricInfo 表达指标本身，当前直接用指标名作为稳定业务 id
             metric_info = MetricInfo(
@@ -213,6 +228,8 @@ class MetaKnowledgeService:
                 alias=metric.alias,
             )
             metric_infos.append(metric_info)
+
+            # 一个指标可以依赖多个字段，逐条建立字段与指标的关联关系
             for column in metric.relevant_columns:
                 # ColumnMetric 单独表达“某个指标依赖某个字段”这层关系
                 column_metric = ColumnMetric(column_id=column, metric_id=metric.name)
@@ -220,9 +237,11 @@ class MetaKnowledgeService:
 
         # 指标本身和字段关系要放在同一笔事务里，避免只写入其中一部分
         async with self.meta_mysql_repository.session.begin():
+            # 指标定义写入 metric_info，关联关系写入 column_metric
             self.meta_mysql_repository.save_metric_infos(metric_infos)
             self.meta_mysql_repository.save_column_metrics(column_metrics)
 
+        # 返回内存中的指标对象，供后续构建 Qdrant 指标向量索引使用
         return metric_infos
 
     async def _save_metrics_to_qdrant(self, metric_infos: list[MetricInfo]):

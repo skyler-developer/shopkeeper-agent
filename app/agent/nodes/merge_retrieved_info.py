@@ -80,6 +80,43 @@ async def merge_retrieved_info(
         # 4. 按表组织字段上下文
         # SQL 生成提示词通常按“表 -> 字段列表”的方式描述结构，
         # 所以这里先把分散的字段按 table_id 归到各自所属表下面。
+        # 示例：
+        # table_to_columns_map = {
+        #     "orders": [
+        #         ColumnInfo(
+        #             id="orders.pay_amount",
+        #             name="pay_amount",
+        #             type="decimal",
+        #             role="measure",
+        #             examples=[99.9, 200.0],
+        #             description="订单实际支付金额",
+        #             alias=["销售额", "支付金额"],
+        #             table_id="orders",
+        #         ),
+        #         ColumnInfo(
+        #             id="orders.region",
+        #             name="region",
+        #             type="varchar",
+        #             role="dimension",
+        #             examples=["华北", "华南", "华东"],
+        #             description="订单所属地区",
+        #             alias=["地区"],
+        #             table_id="orders",
+        #         ),
+        #     ],
+        #     "shops": [
+        #         ColumnInfo(
+        #             id="shops.shop_name",
+        #             name="shop_name",
+        #             type="varchar",
+        #             role="dimension",
+        #             examples=["星巴克", "瑞幸咖啡"],
+        #             description="店铺名称",
+        #             alias=["门店名称"],
+        #             table_id="shops",
+        #         ),
+        #     ],
+        # }
         table_to_columns_map: dict[str, list[ColumnInfo]] = {}
         for column_info in retrieved_column_infos_map.values():
             table_id = column_info.table_id
@@ -90,6 +127,11 @@ async def merge_retrieved_info(
         # 5. 补齐主外键字段
         # 主外键通常不会出现在用户问题里，单靠向量召回容易漏掉；
         # 但多表查询的 Join 路径必须依赖它们，所以每张候选表都要兜底补齐。
+        # get_key_columns_by_table_id方法查询表的主外键，它接收一个 table_id，查询 Meta MySQL 中属于该表、且 role 为 primary_key 或 foreign_key 的字段，返回 list[ColumnInfo]。
+        # [
+            # ColumnInfo(id="orders.order_id", name="order_id", role="primary_key", ...),
+            # ColumnInfo(id="orders.shop_id", name="shop_id", role="foreign_key", ...),
+        # ]
         for table_id in table_to_columns_map.keys():
             key_columns: list[
                 ColumnInfo
@@ -101,14 +143,84 @@ async def merge_retrieved_info(
                 if key_column.id not in column_ids:
                     table_to_columns_map[table_id].append(key_column)
 
+        # 在上一步示例的基础上，补齐主外键后的最终结果示例：
+        # table_to_columns_map = {
+        #     "orders": [
+        #         ColumnInfo(
+        #             id="orders.pay_amount",
+        #             name="pay_amount",
+        #             type="decimal",
+        #             role="measure",
+        #             examples=[99.9, 200.0],
+        #             description="订单实际支付金额",
+        #             alias=["销售额", "支付金额"],
+        #             table_id="orders",
+        #         ),
+        #         ColumnInfo(
+        #             id="orders.region",
+        #             name="region",
+        #             type="varchar",
+        #             role="dimension",
+        #             examples=["华北", "华南", "华东"],
+        #             description="订单所属地区",
+        #             alias=["地区"],
+        #             table_id="orders",
+        #         ),
+        #         ColumnInfo(
+        #             id="orders.order_id",
+        #             name="order_id",
+        #             type="bigint",
+        #             role="primary_key",
+        #             examples=[10001, 10002],
+        #             description="订单ID",
+        #             alias=["订单编号"],
+        #             table_id="orders",
+        #         ),
+        #         ColumnInfo(
+        #             id="orders.shop_id",
+        #             name="shop_id",
+        #             type="bigint",
+        #             role="foreign_key",
+        #             examples=[201, 202],
+        #             description="订单所属店铺ID",
+        #             alias=["店铺ID"],
+        #             table_id="orders",
+        #         ),
+        #     ],
+        #     "shops": [
+        #         ColumnInfo(
+        #             id="shops.shop_name",
+        #             name="shop_name",
+        #             type="varchar",
+        #             role="dimension",
+        #             examples=["星巴克", "瑞幸咖啡"],
+        #             description="店铺名称",
+        #             alias=["门店名称"],
+        #             table_id="shops",
+        #         ),
+        #         ColumnInfo(
+        #             id="shops.shop_id",
+        #             name="shop_id",
+        #             type="bigint",
+        #             role="primary_key",
+        #             examples=[201, 202],
+        #             description="店铺ID",
+        #             alias=["门店ID"],
+        #             table_id="shops",
+        #         ),
+        #     ],
+        # }
+
         # 6. 生成表结构上下文
         # 数据库实体里可能包含入库和索引用字段，传给模型前只保留必要信息，
         # 让后续过滤和 SQL 生成节点面对的是更稳定的 TableInfoState 结构。
         table_infos: list[TableInfoState] = []
         for table_id, column_infos in table_to_columns_map.items():
+            # 根据表 ID 查询表名、表角色和表描述，与已经分组的字段组装成完整表上下文。
             table_info: TableInfo = await meta_mysql_repository.get_table_info_by_id(
                 table_id
             )
+            # 精简字段信息：去掉 id 和 table_id，只保留模型生成 SQL 所需的字段属性。
             columns = [
                 ColumnInfoState(
                     name=column_info.name,
@@ -128,8 +240,51 @@ async def merge_retrieved_info(
             )
             table_infos.append(table_info_state)
 
+        # 最终结果示例（TableInfoState 和 ColumnInfoState 运行时是字典）：
+        # table_infos = [
+        #     {
+        #         "name": "orders",
+        #         "role": "fact",
+        #         "description": "订单事实表",
+        #         "columns": [
+        #             {
+        #                 "name": "pay_amount",
+        #                 "type": "decimal",
+        #                 "role": "measure",
+        #                 "examples": [99.9, 200.0],
+        #                 "description": "订单实际支付金额",
+        #                 "alias": ["销售额", "支付金额"],
+        #             },
+        #             {
+        #                 "name": "order_id",
+        #                 "type": "bigint",
+        #                 "role": "primary_key",
+        #                 "examples": [10001, 10002],
+        #                 "description": "订单ID",
+        #                 "alias": ["订单编号"],
+        #             },
+        #         ],
+        #     },
+        #     {
+        #         "name": "shops",
+        #         "role": "dimension",
+        #         "description": "店铺维度表",
+        #         "columns": [
+        #             {
+        #                 "name": "shop_name",
+        #                 "type": "varchar",
+        #                 "role": "dimension",
+        #                 "examples": ["星巴克", "瑞幸咖啡"],
+        #                 "description": "店铺名称",
+        #                 "alias": ["门店名称"],
+        #             },
+        #         ],
+        #     },
+        # ]
+
         # 7. 生成指标上下文
-        # 指标上下文保留名称 描述 别名和依赖字段，足够让模型理解业务口径。
+        # 遍历召回的 MetricInfo，去掉内部 id，保留模型理解业务口径所需的名称、描述、依赖字段和别名。
+        # MetricInfoState 是 TypedDict，运行时生成的是字典；这里只整理指标定义，不负责计算指标。
         metric_infos: list[MetricInfoState] = [
             MetricInfoState(
                 name=retrieved_metric_info.name,
@@ -139,6 +294,27 @@ async def merge_retrieved_info(
             )
             for retrieved_metric_info in retrieved_metric_infos
         ]
+        # 最终结果示例：
+        # metric_infos = [
+        #     {
+        #         "name": "GMV",
+        #         "description": "订单支付总金额",
+        #         "relevant_columns": [
+        #             "orders.pay_amount",
+        #             "orders.pay_status",
+        #         ],
+        #         "alias": ["销售额", "成交总额"],
+        #     },
+        #     {
+        #         "name": "支付订单数",
+        #         "description": "完成支付的订单数量",
+        #         "relevant_columns": [
+        #             "orders.order_id",
+        #             "orders.pay_status",
+        #         ],
+        #         "alias": ["支付单量"],
+        #     },
+        # ]
 
         logger.info(
             f"合并后的表信息：{[table_info['name'] for table_info in table_infos]}"

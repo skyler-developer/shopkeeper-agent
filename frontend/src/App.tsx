@@ -111,12 +111,32 @@ export default function App() {
             };
           }
 
-          return {
-            ...message,
-            status: "error",
-            content: "这次查询没有成功。",
-            error: event.message,
-          };
+          if (event.type === "analysis") {
+            // 分析结论到达后，用摘要替换占位文案，气泡正文直接展示结论
+            return {
+              ...message,
+              content: event.data.summary,
+              analysis: event.data,
+            };
+          }
+
+          if (event.type === "chart") {
+            return {
+              ...message,
+              chart: event.data,
+            };
+          }
+
+          if (event.type === "error") {
+            return {
+              ...message,
+              status: "error",
+              content: "这次查询没有成功。",
+              error: event.message,
+            };
+          }
+
+          return message;
         }),
       );
     };

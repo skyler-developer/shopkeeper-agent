@@ -5,6 +5,9 @@
 当前链路已经落地关键词抽取和多路召回，字段和指标走 Qdrant 向量检索，字段取值走 ES 全文检索
 整体流程先抽取用户问题关键词，再并行召回字段 字段取值和指标信息，
 随后合并召回结果 过滤候选表和指标 补充额外上下文，最后生成 校验 修正并执行 SQL
+SQL 执行后进入分析闭环：先基于查询结果生成结构化分析结论，再生成 ECharts 图表配置，
+分析 skill 沉淀在 analyze_data.prompt，图表 skill 沉淀在 generate_chart.prompt，可独立替换升级
+两个分析类节点失败时只降级不中断，不影响已交付的查询结果
 """
 
 import asyncio
@@ -14,10 +17,12 @@ from langgraph.graph import StateGraph
 
 from app.agent.context import DataAgentContext
 from app.agent.nodes.add_extra_context import add_extra_context
+from app.agent.nodes.analyze_data import analyze_data
 from app.agent.nodes.correct_sql import correct_sql
 from app.agent.nodes.extract_keywords import extract_keywords
 from app.agent.nodes.filter_metric import filter_metric
 from app.agent.nodes.filter_table import filter_table
+from app.agent.nodes.generate_chart import generate_chart
 from app.agent.nodes.generate_sql import generate_sql
 from app.agent.nodes.merge_retrieved_info import merge_retrieved_info
 from app.agent.nodes.recall_column import recall_column
@@ -55,6 +60,9 @@ graph_builder.add_node("generate_sql", generate_sql)
 graph_builder.add_node("validate_sql", validate_sql)
 graph_builder.add_node("correct_sql", correct_sql)
 graph_builder.add_node("run_sql", run_sql)
+# 分析闭环：基于执行结果产出分析结论和 ECharts 图表配置
+graph_builder.add_node("analyze_data", analyze_data)
+graph_builder.add_node("generate_chart", generate_chart)
 
 # 从用户问题开始，先抽取关键词作为后续检索的基础
 graph_builder.add_edge(START, "extract_keywords")
@@ -86,7 +94,11 @@ graph_builder.add_conditional_edges(
     path_map={"run_sql": "run_sql", "correct_sql": "correct_sql"},
 )
 graph_builder.add_edge("correct_sql", "run_sql")
-graph_builder.add_edge("run_sql", END)
+
+# SQL 执行后进入分析闭环，先生成分析结论，图表再结合结论可视化
+graph_builder.add_edge("run_sql", "analyze_data")
+graph_builder.add_edge("analyze_data", "generate_chart")
+graph_builder.add_edge("generate_chart", END)
 
 # 编译后的 graph 是对外使用的 Agent 执行入口
 graph = graph_builder.compile()

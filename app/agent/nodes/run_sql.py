@@ -2,7 +2,8 @@
 SQL 执行节点
 
 负责执行最终 SQL，并记录查询结果。
-它是当前 SQL 闭环的结束节点，执行完成后流程进入 END。
+执行结果会同时写回 State 的 result_rows 字段，
+作为后续数据分析节点和图表生成节点的输入。
 """
 
 from langgraph.runtime import Runtime
@@ -29,6 +30,8 @@ async def run_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]):
         logger.info(f"SQL执行结果：{result}")
         writer({"type": "progress", "step": step, "status": "success"})
         writer({"type": "result", "data": result})
+        # 查询结果写回 State，驱动后续的分析和图表节点
+        return {"result_rows": result}
 
     except Exception as e:
         logger.error(f"{step} failed: {e}")

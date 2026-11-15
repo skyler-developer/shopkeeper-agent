@@ -5,6 +5,7 @@ State 是 LangGraph 各节点之间传递和更新的共享数据
 本章在用户原始问题之外，新增关键词列表和三路召回结果
 并把召回到的实体整理成后续提示词更容易消费的表信息和指标信息
 SQL 生成闭环会继续写入候选 SQL 以及校验错误信息，用于控制校正或执行分支
+分析闭环在 SQL 执行后写入查询结果行 分析结论和 ECharts 图表配置
 """
 
 from typing import TypedDict
@@ -60,6 +61,21 @@ class DBInfoState(TypedDict):
     version: str
 
 
+class AnalysisFindingState(TypedDict):
+    """一条关键发现，标题加论据，方便前端分组展示"""
+
+    title: str
+    detail: str
+
+
+class AnalysisState(TypedDict):
+    """数据分析 skill 的结构化产出"""
+
+    summary: str
+    findings: list[AnalysisFindingState]
+    suggestions: list[str]
+
+
 class DataAgentState(TypedDict):
     """一次问数链路中的核心状态"""
 
@@ -77,3 +93,12 @@ class DataAgentState(TypedDict):
     sql: str  # 生成或校正后的SQL
 
     error: str  # 校验SQL时出现的错误信息
+
+    # SQL 执行结果行，是后续分析和图表节点的输入
+    result_rows: list[dict]
+
+    # 分析 skill 产出的结构化结论
+    analysis: AnalysisState
+
+    # 图表 skill 产出的 ECharts option 配置，前端直接 setOption 渲染
+    chart_option: dict

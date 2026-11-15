@@ -15,12 +15,38 @@ export type ResultEvent = {
   data: unknown;
 };
 
+export type AnalysisFinding = {
+  title: string;
+  detail: string;
+};
+
+export type AnalysisData = {
+  summary: string;
+  findings?: AnalysisFinding[];
+  suggestions?: string[];
+};
+
+export type AnalysisEvent = {
+  type: "analysis";
+  data: AnalysisData;
+};
+
+export type ChartEvent = {
+  type: "chart";
+  data: Record<string, unknown>;
+};
+
 export type ErrorEvent = {
   type: "error";
   message: string;
 };
 
-export type AgentEvent = ProgressEvent | ResultEvent | ErrorEvent;
+export type AgentEvent =
+  | ProgressEvent
+  | ResultEvent
+  | AnalysisEvent
+  | ChartEvent
+  | ErrorEvent;
 
 export type StepState = {
   step: string;
@@ -36,5 +62,7 @@ export type ChatMessage = {
   status?: "streaming" | "done" | "error";
   steps?: StepState[];
   result?: unknown;
+  analysis?: AnalysisData;
+  chart?: Record<string, unknown>;
   error?: string;
 };
